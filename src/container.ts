@@ -1,3 +1,4 @@
+import { Scope } from "./decorators/injectable";
 import { INJECT, INJECTABLE, SCOPE } from "./tokens";
 
 type Ctor<T = unknown> = new (...args: any[]) => T;
@@ -46,7 +47,7 @@ export class Container {
     });
     const instance = new target(...args);
 
-    const isSingleton = Reflect.getMetadata(SCOPE, target) === "singleton";
+    const isSingleton = Reflect.getMetadata(SCOPE, target) === Scope.SINGLETON;
     if (isSingleton) this.singletons.set(target, instance);
 
     return instance;

@@ -25,9 +25,7 @@ export class Container {
     }
 
     if (path.includes(target.name)) {
-      throw new Error(
-        `цикл залежностей: ${[...path, target.name].join(" -> ")}`,
-      );
+      throw new Error(`circular deps: ${[...path, target.name].join(" -> ")}`);
     }
 
     if (this.singletons.has(target)) return this.singletons.get(target) as T;

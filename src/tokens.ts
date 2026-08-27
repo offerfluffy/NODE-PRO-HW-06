@@ -1,5 +1,9 @@
-const INJECTABLE = Symbol("injectable");
-const INJECT = Symbol("inject");
-const SCOPE = Symbol("scope");
+export const INJECTABLE = Symbol("injectable");
+export const INJECT = Symbol("inject");
+export const SCOPE = Symbol("scope");
 
-export { INJECTABLE, INJECT, SCOPE };
+export const Scope = {
+  SINGLETON: "singleton",
+  TRANSIENT: "transient",
+} as const;
+export type ScopeValue = (typeof Scope)[keyof typeof Scope];

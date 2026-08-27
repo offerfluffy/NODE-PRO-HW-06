@@ -1,5 +1,4 @@
-import { Scope } from "./decorators/injectable";
-import { INJECT, INJECTABLE, SCOPE } from "./tokens";
+import { INJECT, INJECTABLE, Scope, SCOPE } from "./tokens";
 
 type Ctor<T = unknown> = new (...args: any[]) => T;
 

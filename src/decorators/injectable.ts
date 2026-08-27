@@ -1,11 +1,5 @@
 import "reflect-metadata";
-import { INJECTABLE, SCOPE } from "../tokens";
-
-export const Scope = {
-  SINGLETON: "singleton",
-  TRANSIENT: "transient",
-} as const;
-export type ScopeValue = (typeof Scope)[keyof typeof Scope];
+import { INJECTABLE, Scope, SCOPE, ScopeValue } from "../tokens";
 
 interface InjectableProps {
   scope: ScopeValue;

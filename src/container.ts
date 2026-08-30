@@ -1,3 +1,5 @@
+import "reflect-metadata";
+
 import { INJECT, INJECTABLE, Scope, SCOPE } from "./tokens";
 
 type Ctor<T = unknown> = new (...args: any[]) => T;

@@ -1,3 +1,5 @@
+import "reflect-metadata";
+
 import { MethodValue } from "./decorators/methods";
 import { ParamValue } from "./decorators/params";
 import { CONTROLLER_PREFIX, ROUTE_PARAMS, ROUTES } from "./tokens";

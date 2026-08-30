@@ -42,7 +42,7 @@ const createTestServer = async (controllers: Ctor[]) => {
   });
   const port = await listen(server);
 
-  return { server, baseUrl: `http://127.0.0.1:${port}` };
+  return { server, baseUrl: `http://127.0.0.1:${port}`, container };
 };
 
 describe("Dispatcher", () => {
@@ -142,6 +142,41 @@ describe("Dispatcher", () => {
 
         assert.equal(response.status, 201);
         assert.deepEqual(body.body, { email: "test@example.com" });
+      } finally {
+        await close(server);
+      }
+    });
+
+    it("resolves controller dependencies through the container singleton", async () => {
+      @Injectable()
+      class UsersService {}
+
+      let singleton: UsersService;
+
+      @Injectable()
+      @Controller("users")
+      class UsersController {
+        constructor(private usersService: UsersService) {}
+
+        @Get("")
+        findAll() {
+          return {
+            serviceIsSingleton: this.usersService === singleton,
+          };
+        }
+      }
+
+      const { server, baseUrl, container } = await createTestServer([
+        UsersController,
+      ]);
+      singleton = container.resolve(UsersService);
+
+      try {
+        const response = await fetch(`${baseUrl}/users`);
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(body.serviceIsSingleton, true);
       } finally {
         await close(server);
       }

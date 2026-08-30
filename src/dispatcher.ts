@@ -1,6 +1,7 @@
 import { Container } from "./container";
 import { METHOD, MethodValue } from "./decorators/methods";
 import { PARAM } from "./decorators/params";
+import { ValidationException, ValidationPipe } from "./pipes/validation.pipe";
 import { Router } from "./router";
 
 import http from "node:http";
@@ -13,6 +14,7 @@ export class Dispatcher {
   constructor(
     private container: Container,
     private router: Router,
+    private validationPipe = new ValidationPipe(),
   ) {}
 
   async handle(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -43,7 +45,14 @@ export class Dispatcher {
     }
 
     const args: unknown[] = [];
-    Object.entries(match.route.params).forEach(([index, metadata]) => {
+    const paramTypes =
+      Reflect.getMetadata(
+        "design:paramtypes",
+        match.route.controller.prototype,
+        match.route.methodName,
+      ) ?? [];
+
+    for (const [index, metadata] of Object.entries(match.route.params)) {
       const paramIndex = Number(index);
 
       if (metadata.type === PARAM.PARAM) {
@@ -57,9 +66,22 @@ export class Dispatcher {
 
         args[paramIndex] = url.searchParams.get(metadata.name);
       } else if (metadata.type === PARAM.BODY) {
-        args[paramIndex] = parsedBody;
+        try {
+          const dtoClass = paramTypes[paramIndex];
+          args[paramIndex] = await this.validationPipe.transform(
+            parsedBody,
+            dtoClass,
+          );
+        } catch (error) {
+          if (error instanceof ValidationException) {
+            this.sendJson(res, 400, { errors: error.details });
+            return;
+          }
+
+          throw error;
+        }
       }
-    });
+    }
 
     const controllerInstance = this.container.resolve(
       match.route.controller,

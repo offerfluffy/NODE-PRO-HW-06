@@ -16,6 +16,12 @@ export class ValidationException extends Error {
 
 export class ValidationPipe {
   async transform(value: unknown, metatype: Ctor): Promise<unknown> {
+    const primitiveTypes: unknown[] = [String, Number, Boolean, Array, Object];
+
+    if (primitiveTypes.includes(metatype)) {
+      return value;
+    }
+
     const instance = plainToInstance(metatype, value);
     const errors = await validate(instance);
 

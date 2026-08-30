@@ -6,6 +6,7 @@ import Injectable from "../src/decorators/injectable";
 import { Container } from "../src/container";
 import { Router } from "../src/router";
 import { Dispatcher } from "../src/dispatcher";
+import { CreateUserDto } from "../src/dto/create-user.dto";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -141,6 +142,84 @@ describe("Dispatcher", () => {
 
         assert.equal(response.status, 201);
         assert.deepEqual(body.body, { email: "test@example.com" });
+      } finally {
+        await close(server);
+      }
+    });
+  });
+
+  describe("validation", () => {
+    it("returns 400 with details for invalid DTO body", async () => {
+      @Injectable()
+      class UsersService {
+        create(body: CreateUserDto) {
+          return { email: body.email };
+        }
+      }
+
+      @Injectable()
+      @Controller("users")
+      class UsersController {
+        constructor(private usersService: UsersService) {}
+
+        @Post("")
+        create(@Body() body: CreateUserDto) {
+          return this.usersService.create(body);
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([UsersController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/users`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "not-an-email", name: "Ada" }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 400);
+        assert.match(JSON.stringify(body), /email/);
+      } finally {
+        await close(server);
+      }
+    });
+
+    it("passes DTO instance to handler for valid body", async () => {
+      @Injectable()
+      class UsersService {
+        create(body: CreateUserDto) {
+          return {
+            email: body.email,
+            isDto: body instanceof CreateUserDto,
+          };
+        }
+      }
+
+      @Injectable()
+      @Controller("users")
+      class UsersController {
+        constructor(private usersService: UsersService) {}
+
+        @Post("")
+        create(@Body() body: CreateUserDto) {
+          return this.usersService.create(body);
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([UsersController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/users`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: "ada@example.com", name: "Ada" }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 201);
+        assert.equal(body.email, "ada@example.com");
+        assert.equal(body.isDto, true);
       } finally {
         await close(server);
       }

@@ -1,10 +1,10 @@
 import { ROUTES } from "../tokens";
 
-const METHOD = {
+export const METHOD = {
   GET: "GET",
   POST: "POST",
 } as const;
-type MethodValue = (typeof METHOD)[keyof typeof METHOD];
+export type MethodValue = (typeof METHOD)[keyof typeof METHOD];
 
 const createRouteDecorator = (
   target: Object,
@@ -15,7 +15,7 @@ const createRouteDecorator = (
   const metadata = Reflect.getMetadata(ROUTES, target) ?? [];
   Reflect.defineMetadata(
     ROUTES,
-    [...metadata, { methodName: key, requestMethod, path }],
+    [...metadata, { methodName: String(key), requestMethod, path }],
     target,
   );
 };

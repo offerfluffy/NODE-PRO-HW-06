@@ -1,11 +1,11 @@
 import { ROUTE_PARAMS } from "../tokens";
 
-const PARAM = {
+export const PARAM = {
   BODY: "body",
   PARAM: "param",
   QUERY: "query",
 } as const;
-type ParamValue = (typeof PARAM)[keyof typeof PARAM];
+export type ParamValue = (typeof PARAM)[keyof typeof PARAM];
 
 const createRouteParamDecorator = (
   target: Object,
@@ -19,13 +19,15 @@ const createRouteParamDecorator = (
   }
 
   const metadata = Reflect.getMetadata(ROUTE_PARAMS, target) ?? {};
-  const methodParams = metadata[key] ?? {};
+
+  const methodName = String(key);
+  const methodParams = metadata[methodName] ?? {};
 
   Reflect.defineMetadata(
     ROUTE_PARAMS,
     {
       ...metadata,
-      [key]: {
+      [methodName]: {
         ...methodParams,
         [index]: { type, ...(arg !== undefined ? { name: arg } : {}) },
       },

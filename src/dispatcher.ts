@@ -1,0 +1,151 @@
+import { Container } from "./container";
+import { METHOD, MethodValue } from "./decorators/methods";
+import { PARAM } from "./decorators/params";
+import { ValidationException, ValidationPipe } from "./pipes/validation.pipe";
+import { Router } from "./router";
+
+import http from "node:http";
+
+type RouteMatch = NonNullable<ReturnType<Router["match"]>>;
+type ControllerInstance = Record<
+  string,
+  (...args: unknown[]) => unknown | Promise<unknown>
+>;
+
+const isMethodValue = (method: string | undefined): method is MethodValue => {
+  return method === METHOD.GET || method === METHOD.POST;
+};
+
+export class Dispatcher {
+  constructor(
+    private container: Container,
+    private router: Router,
+    private validationPipe = new ValidationPipe(),
+  ) {}
+
+  async handle(req: http.IncomingMessage, res: http.ServerResponse) {
+    try {
+      await this.dispatch(req, res);
+    } catch {
+      this.sendJson(res, 500, { error: "Internal Server Error" });
+    }
+  }
+
+  private async dispatch(req: http.IncomingMessage, res: http.ServerResponse) {
+    const requestMethod = req.method;
+    if (!isMethodValue(requestMethod)) {
+      this.sendJson(res, 405, { error: "Method Not Allowed" });
+      return;
+    }
+
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const pathname = url.pathname;
+
+    const match = this.router.match(requestMethod, pathname);
+    if (match === undefined) {
+      this.sendJson(res, 404, { error: "Not Found" });
+      return;
+    }
+
+    let parsedBody: unknown = undefined;
+
+    if (requestMethod === METHOD.POST) {
+      try {
+        parsedBody = await this.readBody(req);
+      } catch {
+        this.sendJson(res, 400, { error: "Invalid JSON" });
+        return;
+      }
+    }
+
+    const args: unknown[] = [];
+    const paramTypes =
+      Reflect.getMetadata(
+        "design:paramtypes",
+        match.route.controller.prototype,
+        match.route.methodName,
+      ) ?? [];
+
+    for (const [index, metadata] of Object.entries(match.route.params)) {
+      const paramIndex = Number(index);
+
+      if (metadata.type === PARAM.PARAM) {
+        if (metadata.name === undefined)
+          throw new Error("Param metadata requires a name");
+
+        args[paramIndex] = match.pathParams[metadata.name];
+      } else if (metadata.type === PARAM.QUERY) {
+        if (metadata.name === undefined)
+          throw new Error("Query metadata requires a name");
+
+        args[paramIndex] = url.searchParams.get(metadata.name);
+      } else if (metadata.type === PARAM.BODY) {
+        try {
+          const dtoClass = paramTypes[paramIndex];
+          args[paramIndex] = await this.validationPipe.transform(
+            parsedBody,
+            dtoClass,
+          );
+        } catch (error) {
+          if (error instanceof ValidationException) {
+            this.sendJson(res, 400, { errors: error.details });
+            return;
+          }
+
+          throw error;
+        }
+      }
+    }
+
+    const result = await this.invokeRouteHandler(match, args);
+
+    this.sendJson(res, requestMethod === METHOD.GET ? 200 : 201, result);
+  }
+
+  private async invokeRouteHandler(match: RouteMatch, args: unknown[]) {
+    const controllerInstance = this.container.resolve(
+      match.route.controller,
+    ) as ControllerInstance;
+
+    return controllerInstance[match.route.methodName](...args);
+  }
+
+  private readBody(req: http.IncomingMessage): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+
+      req.on("data", (chunk) => {
+        chunks.push(Buffer.from(chunk));
+      });
+
+      req.on("end", () => {
+        const rawBody = Buffer.concat(chunks).toString("utf8");
+
+        if (rawBody.length === 0) {
+          resolve(undefined);
+          return;
+        }
+
+        try {
+          resolve(JSON.parse(rawBody));
+        } catch {
+          reject(new Error("Invalid JSON"));
+        }
+      });
+
+      req.on("error", reject);
+    });
+  }
+
+  private sendJson(
+    res: http.ServerResponse,
+    statusCode: number,
+    body: unknown,
+  ) {
+    res.writeHead(statusCode, {
+      "Content-Type": "application/json",
+    });
+
+    res.end(JSON.stringify(body));
+  }
+}

@@ -6,6 +6,12 @@ import { Router } from "./router";
 
 import http from "node:http";
 
+type RouteMatch = NonNullable<ReturnType<Router["match"]>>;
+type ControllerInstance = Record<
+  string,
+  (...args: unknown[]) => unknown | Promise<unknown>
+>;
+
 const isMethodValue = (method: string | undefined): method is MethodValue => {
   return method === METHOD.GET || method === METHOD.POST;
 };
@@ -18,6 +24,14 @@ export class Dispatcher {
   ) {}
 
   async handle(req: http.IncomingMessage, res: http.ServerResponse) {
+    try {
+      await this.dispatch(req, res);
+    } catch {
+      this.sendJson(res, 500, { error: "Internal Server Error" });
+    }
+  }
+
+  private async dispatch(req: http.IncomingMessage, res: http.ServerResponse) {
     const requestMethod = req.method;
     if (!isMethodValue(requestMethod)) {
       this.sendJson(res, 405, { error: "Method Not Allowed" });
@@ -83,12 +97,17 @@ export class Dispatcher {
       }
     }
 
-    const controllerInstance = this.container.resolve(
-      match.route.controller,
-    ) as Record<string, (...args: unknown[]) => unknown | Promise<unknown>>;
-    const result = await controllerInstance[match.route.methodName](...args);
+    const result = await this.invokeRouteHandler(match, args);
 
     this.sendJson(res, requestMethod === METHOD.GET ? 200 : 201, result);
+  }
+
+  private async invokeRouteHandler(match: RouteMatch, args: unknown[]) {
+    const controllerInstance = this.container.resolve(
+      match.route.controller,
+    ) as ControllerInstance;
+
+    return controllerInstance[match.route.methodName](...args);
   }
 
   private readBody(req: http.IncomingMessage): Promise<unknown> {

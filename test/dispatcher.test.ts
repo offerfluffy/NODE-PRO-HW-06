@@ -260,4 +260,29 @@ describe("Dispatcher", () => {
       }
     });
   });
+
+  describe("errors", () => {
+    it("returns 500 when controller handler throws", async () => {
+      @Injectable()
+      @Controller("")
+      class BoomController {
+        @Get("boom")
+        boom() {
+          throw new Error("boom");
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([BoomController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/boom`);
+        const body = await response.json();
+
+        assert.equal(response.status, 500);
+        assert.deepEqual(body, { error: "Internal Server Error" });
+      } finally {
+        await close(server);
+      }
+    });
+  });
 });

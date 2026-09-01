@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Container } from "./container";
 import { METHOD, MethodValue } from "./decorators/methods";
 import { PARAM } from "./decorators/params";
@@ -5,6 +6,7 @@ import { ValidationException, ValidationPipe } from "./pipes/validation.pipe";
 import { Router } from "./router";
 
 import http from "node:http";
+import requestContext from "./context/request-context";
 
 type RouteMatch = NonNullable<ReturnType<Router["match"]>>;
 type ControllerInstance = Record<
@@ -24,8 +26,14 @@ export class Dispatcher {
   ) {}
 
   async handle(req: http.IncomingMessage, res: http.ServerResponse) {
+    const requestId = this.getRequestId(req);
+
+    res.setHeader("X-Request-Id", requestId);
+
     try {
-      await this.dispatch(req, res);
+      await requestContext.run(requestId, async () => {
+        await this.dispatch(req, res);
+      });
     } catch {
       this.sendJson(res, 500, { error: "Internal Server Error" });
     }
@@ -108,6 +116,16 @@ export class Dispatcher {
     ) as ControllerInstance;
 
     return controllerInstance[match.route.methodName](...args);
+  }
+
+  private getRequestId(req: http.IncomingMessage) {
+    const header = req.headers["x-request-id"];
+
+    if (Array.isArray(header) && header[0]) return header[0];
+
+    if (typeof header === "string" && header.length > 0) return header;
+
+    return randomUUID();
   }
 
   private readBody(req: http.IncomingMessage): Promise<unknown> {

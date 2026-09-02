@@ -7,8 +7,8 @@ import { Router } from "./router";
 import http from "node:http";
 import requestContext from "./context/request-context";
 import exceptionFilter from "./filters/exception.filter";
-import { ROUTE_PIPES } from "./tokens";
-import { NotFoundError } from "./errors";
+import { ROUTE_GUARDS, ROUTE_PIPES } from "./tokens";
+import { AuthError, NotFoundError } from "./errors";
 
 type RouteMatch = NonNullable<ReturnType<Router["match"]>>;
 type ControllerInstance = Record<
@@ -55,6 +55,21 @@ export class Dispatcher {
       throw new NotFoundError(
         `Route ${requestMethod} ${pathname} was not found`,
       );
+    }
+
+    const guards =
+      Reflect.getMetadata(
+        ROUTE_GUARDS,
+        match.route.controller.prototype,
+        match.route.methodName,
+      ) ?? [];
+
+    for (const guard of guards) {
+      const allowed = await guard.canActivate(req);
+
+      if (!allowed) {
+        throw new AuthError();
+      }
     }
 
     let parsedBody: unknown = undefined;

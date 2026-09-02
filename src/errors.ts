@@ -12,7 +12,17 @@ type ValidationFieldError = {
 };
 
 export class ValidationError extends Error {
+  statusCode = 400;
+
   constructor(public fields: ValidationFieldError[]) {
     super("Validation failed");
+  }
+}
+
+export class AuthError extends Error {
+  statusCode = 403;
+
+  constructor(message = "Forbidden") {
+    super(message);
   }
 }

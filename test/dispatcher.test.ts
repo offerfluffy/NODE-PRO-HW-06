@@ -9,6 +9,8 @@ import { Dispatcher } from "../src/dispatcher";
 import { CreateUserDto, CreateUserSchema } from "../src/dto/create-user.dto";
 import { UsePipes } from "../src/decorators/use-pipes";
 import { ZodValidationPipe } from "../src/pipes/validation.pipe";
+import { UseGuards } from "../src/decorators/use-guards";
+import { AuthGuard } from "../src/guards/auth.guard";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -263,6 +265,66 @@ describe("Dispatcher", () => {
           email: "ada@example.com",
           name: "Ada",
         });
+      } finally {
+        await close(server);
+      }
+    });
+  });
+
+  describe("guards", () => {
+    it("returns 403 and does not call handler when guard denies request", async () => {
+      let handlerCalled = false;
+
+      @Injectable()
+      @Controller("secure")
+      class SecureController {
+        @Get("")
+        @UseGuards(new AuthGuard())
+        findSecure() {
+          handlerCalled = true;
+          return { ok: true };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([SecureController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/secure`);
+        const body = await response.json();
+
+        assert.equal(response.status, 403);
+        assert.equal(body.error, "Forbidden");
+        assert.equal(handlerCalled, false);
+      } finally {
+        await close(server);
+      }
+    });
+
+    it("calls handler when guarded request has Authorization header", async () => {
+      let handlerCalled = false;
+
+      @Injectable()
+      @Controller("secure")
+      class SecureController {
+        @Get("")
+        @UseGuards(new AuthGuard())
+        findSecure() {
+          handlerCalled = true;
+          return { ok: true };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([SecureController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/secure`, {
+          headers: { Authorization: "Bearer test" },
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body, { ok: true });
+        assert.equal(handlerCalled, true);
       } finally {
         await close(server);
       }

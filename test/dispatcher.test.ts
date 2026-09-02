@@ -12,7 +12,7 @@ import { ZodValidationPipe } from "../src/pipes/validation.pipe";
 import { UseGuards } from "../src/decorators/use-guards";
 import { AuthGuard } from "../src/guards/auth.guard";
 import { UseInterceptors } from "../src/decorators/use-interceptors";
-import loggingInterceptor from "../src/interceptors/logging.interceptor";
+import { LoggingInterceptor } from "../src/interceptors/logging.interceptor";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -342,7 +342,7 @@ describe("Dispatcher", () => {
       @Controller("users")
       class UsersController {
         @Get(":id")
-        @UseInterceptors(loggingInterceptor)
+        @UseInterceptors(new LoggingInterceptor())
         findOne(@Param("id") id: string) {
           return { id };
         }

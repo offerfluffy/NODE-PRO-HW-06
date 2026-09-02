@@ -10,5 +10,3 @@ export class AuthGuard implements CanActivate {
     return typeof header === "string" && header.length > 0;
   }
 }
-
-export const authGuard = new AuthGuard();

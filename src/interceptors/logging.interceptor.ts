@@ -7,7 +7,7 @@ export interface NestInterceptor {
   ): Promise<unknown>;
 }
 
-class LoggingInterceptor implements NestInterceptor {
+export class LoggingInterceptor implements NestInterceptor {
   async intercept(req: http.IncomingMessage, next: () => Promise<unknown>) {
     const start = performance.now();
 
@@ -19,5 +19,3 @@ class LoggingInterceptor implements NestInterceptor {
     }
   }
 }
-
-export default new LoggingInterceptor();

@@ -14,6 +14,7 @@ import { AuthGuard } from "../src/guards/auth.guard";
 import { UseInterceptors } from "../src/decorators/use-interceptors";
 import { LoggingInterceptor } from "../src/interceptors/logging.interceptor";
 import requestContext from "../src/context/request-context";
+import { NotFoundError } from "../src/errors";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -456,6 +457,30 @@ describe("Dispatcher", () => {
   });
 
   describe("errors", () => {
+    it("maps NotFoundError to 404 with a meaningful message", async () => {
+      @Injectable()
+      @Controller("users")
+      class UsersController {
+        @Get(":id")
+        findOne(@Param("id") id: string) {
+          throw new NotFoundError(`User ${id} was not found`);
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([UsersController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/users/404`);
+        const body = await response.json();
+
+        assert.equal(response.status, 404);
+        assert.equal(body.error, "Not Found");
+        assert.equal(body.message, "User 404 was not found");
+      } finally {
+        await close(server);
+      }
+    });
+
     it("returns 500 when controller handler throws", async () => {
       @Injectable()
       @Controller("")
@@ -471,9 +496,11 @@ describe("Dispatcher", () => {
       try {
         const response = await fetch(`${baseUrl}/boom`);
         const body = await response.json();
+        const serializedBody = JSON.stringify(body);
 
         assert.equal(response.status, 500);
         assert.deepEqual(body, { error: "Internal Server Error" });
+        assert.doesNotMatch(serializedBody, /boom|at .*\.ts:/);
       } finally {
         await close(server);
       }

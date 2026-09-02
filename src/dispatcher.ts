@@ -1,10 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { Container } from "./container";
 import { METHOD, MethodValue } from "./decorators/methods";
 import { PARAM } from "./decorators/params";
-import { ValidationException, ValidationPipe } from "./pipes/validation.pipe";
 import { Router } from "./router";
 
 import http from "node:http";
+import requestContext from "./context/request-context";
+import exceptionFilter from "./filters/exception.filter";
+import { ROUTE_GUARDS, ROUTE_INTERCEPTORS, ROUTE_PIPES } from "./tokens";
+import { AuthError, NotFoundError, ValidationError } from "./errors";
 
 type RouteMatch = NonNullable<ReturnType<Router["match"]>>;
 type ControllerInstance = Record<
@@ -20,14 +24,19 @@ export class Dispatcher {
   constructor(
     private container: Container,
     private router: Router,
-    private validationPipe = new ValidationPipe(),
   ) {}
 
   async handle(req: http.IncomingMessage, res: http.ServerResponse) {
+    const requestId = this.getRequestId(req);
+
+    res.setHeader("X-Request-Id", requestId);
+
     try {
-      await this.dispatch(req, res);
-    } catch {
-      this.sendJson(res, 500, { error: "Internal Server Error" });
+      await requestContext.run(requestId, async () => {
+        await this.dispatch(req, res);
+      });
+    } catch (error) {
+      exceptionFilter.catch(error, res);
     }
   }
 
@@ -43,28 +52,65 @@ export class Dispatcher {
 
     const match = this.router.match(requestMethod, pathname);
     if (match === undefined) {
-      this.sendJson(res, 404, { error: "Not Found" });
-      return;
+      throw new NotFoundError(
+        `Route ${requestMethod} ${pathname} was not found`,
+      );
     }
 
+    const guards =
+      Reflect.getMetadata(
+        ROUTE_GUARDS,
+        match.route.controller.prototype,
+        match.route.methodName,
+      ) ?? [];
+
+    for (const guard of guards) {
+      const allowed = await guard.canActivate(req);
+
+      if (!allowed) {
+        throw new AuthError();
+      }
+    }
+
+    const interceptors =
+      Reflect.getMetadata(
+        ROUTE_INTERCEPTORS,
+        match.route.controller.prototype,
+        match.route.methodName,
+      ) ?? [];
+
+    let next = async () => {
+      const parsedBody = await this.parseBody(req, requestMethod);
+      const args = await this.buildArgs(match, url, parsedBody);
+      return await this.invokeRouteHandler(match, args);
+    };
+
+    for (const interceptor of [...interceptors].reverse()) {
+      const currentNext = next;
+      next = () => interceptor.intercept(req, currentNext);
+    }
+
+    const result = await next();
+
+    this.sendJson(res, requestMethod === METHOD.GET ? 200 : 201, result);
+  }
+
+  private async parseBody(req: http.IncomingMessage, requestMethod: string) {
     let parsedBody: unknown = undefined;
 
     if (requestMethod === METHOD.POST) {
       try {
         parsedBody = await this.readBody(req);
       } catch {
-        this.sendJson(res, 400, { error: "Invalid JSON" });
-        return;
+        throw new ValidationError([]);
       }
     }
 
+    return parsedBody;
+  }
+
+  private async buildArgs(match: RouteMatch, url: URL, parsedBody: unknown) {
     const args: unknown[] = [];
-    const paramTypes =
-      Reflect.getMetadata(
-        "design:paramtypes",
-        match.route.controller.prototype,
-        match.route.methodName,
-      ) ?? [];
 
     for (const [index, metadata] of Object.entries(match.route.params)) {
       const paramIndex = Number(index);
@@ -80,26 +126,24 @@ export class Dispatcher {
 
         args[paramIndex] = url.searchParams.get(metadata.name);
       } else if (metadata.type === PARAM.BODY) {
-        try {
-          const dtoClass = paramTypes[paramIndex];
-          args[paramIndex] = await this.validationPipe.transform(
-            parsedBody,
-            dtoClass,
-          );
-        } catch (error) {
-          if (error instanceof ValidationException) {
-            this.sendJson(res, 400, { errors: error.details });
-            return;
-          }
+        const pipes =
+          Reflect.getMetadata(
+            ROUTE_PIPES,
+            match.route.controller.prototype,
+            match.route.methodName,
+          ) ?? [];
 
-          throw error;
+        let bodyArg = parsedBody;
+
+        for (const pipe of pipes) {
+          bodyArg = await pipe.transform(bodyArg);
         }
+
+        args[paramIndex] = bodyArg;
       }
     }
 
-    const result = await this.invokeRouteHandler(match, args);
-
-    this.sendJson(res, requestMethod === METHOD.GET ? 200 : 201, result);
+    return args;
   }
 
   private async invokeRouteHandler(match: RouteMatch, args: unknown[]) {
@@ -108,6 +152,16 @@ export class Dispatcher {
     ) as ControllerInstance;
 
     return controllerInstance[match.route.methodName](...args);
+  }
+
+  private getRequestId(req: http.IncomingMessage) {
+    const header = req.headers["x-request-id"];
+
+    if (Array.isArray(header) && header[0]) return header[0];
+
+    if (typeof header === "string" && header.length > 0) return header;
+
+    return randomUUID();
   }
 
   private readBody(req: http.IncomingMessage): Promise<unknown> {

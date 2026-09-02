@@ -1,39 +1,25 @@
-import { plainToInstance } from "class-transformer";
-import { validate } from "class-validator";
+import { ZodType } from "zod";
+import { ValidationError } from "../errors";
 
-type Ctor<T extends object = object> = new (...args: any[]) => T;
-
-export type ValidationErrorDetail = {
-  field: string;
-  constraints: Record<string, string>;
-};
-
-export class ValidationException extends Error {
-  constructor(public details: ValidationErrorDetail[]) {
-    super("Validation failed");
-  }
+interface PipeTransform {
+  transform(value: unknown): unknown | Promise<unknown>;
 }
 
-export class ValidationPipe {
-  async transform(value: unknown, metatype?: Ctor): Promise<unknown> {
-    const primitiveTypes: unknown[] = [String, Number, Boolean, Array, Object];
+export class ZodValidationPipe implements PipeTransform {
+  constructor(private schema: ZodType) {}
 
-    if (metatype === undefined || primitiveTypes.includes(metatype)) {
-      return value;
-    }
+  transform(value: unknown) {
+    const result = this.schema.safeParse(value);
 
-    const instance = plainToInstance(metatype, value ?? {});
-    const errors = await validate(instance);
-
-    if (errors.length > 0) {
-      throw new ValidationException(
-        errors.map((error) => ({
-          field: error.property,
-          constraints: error.constraints ?? {},
+    if (!result.success) {
+      throw new ValidationError(
+        result.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
         })),
       );
     }
 
-    return instance;
+    return result.data;
   }
 }

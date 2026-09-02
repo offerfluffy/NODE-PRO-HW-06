@@ -6,7 +6,15 @@ import Injectable from "../src/decorators/injectable";
 import { Container } from "../src/container";
 import { Router } from "../src/router";
 import { Dispatcher } from "../src/dispatcher";
-import { CreateUserDto } from "../src/dto/create-user.dto";
+import { CreateUserDto, CreateUserSchema } from "../src/dto/create-user.dto";
+import { UsePipes } from "../src/decorators/use-pipes";
+import { ZodValidationPipe } from "../src/pipes/validation.pipe";
+import { UseGuards } from "../src/decorators/use-guards";
+import { AuthGuard } from "../src/guards/auth.guard";
+import { UseInterceptors } from "../src/decorators/use-interceptors";
+import { LoggingInterceptor } from "../src/interceptors/logging.interceptor";
+import requestContext from "../src/context/request-context";
+import { NotFoundError } from "../src/errors";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -198,6 +206,7 @@ describe("Dispatcher", () => {
         constructor(private usersService: UsersService) {}
 
         @Post("")
+        @UsePipes(new ZodValidationPipe(CreateUserSchema))
         create(@Body() body: CreateUserDto) {
           return this.usersService.create(body);
         }
@@ -214,20 +223,18 @@ describe("Dispatcher", () => {
         const body = await response.json();
 
         assert.equal(response.status, 400);
-        assert.match(JSON.stringify(body), /email/);
+        assert.equal(body.error, "Validation Error");
+        assert.match(JSON.stringify(body.fields), /email/);
       } finally {
         await close(server);
       }
     });
 
-    it("passes DTO instance to handler for valid body", async () => {
+    it("passes parsed Zod data to handler for valid body", async () => {
       @Injectable()
       class UsersService {
         create(body: CreateUserDto) {
-          return {
-            email: body.email,
-            isDto: body instanceof CreateUserDto,
-          };
+          return body;
         }
       }
 
@@ -237,6 +244,7 @@ describe("Dispatcher", () => {
         constructor(private usersService: UsersService) {}
 
         @Post("")
+        @UsePipes(new ZodValidationPipe(CreateUserSchema))
         create(@Body() body: CreateUserDto) {
           return this.usersService.create(body);
         }
@@ -248,13 +256,200 @@ describe("Dispatcher", () => {
         const response = await fetch(`${baseUrl}/users`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "ada@example.com", name: "Ada" }),
+          body: JSON.stringify({
+            email: "ada@example.com",
+            name: "Ada",
+            role: "admin",
+          }),
         });
         const body = await response.json();
 
         assert.equal(response.status, 201);
-        assert.equal(body.email, "ada@example.com");
-        assert.equal(body.isDto, true);
+        assert.deepEqual(body, {
+          email: "ada@example.com",
+          name: "Ada",
+        });
+      } finally {
+        await close(server);
+      }
+    });
+  });
+
+  describe("guards", () => {
+    it("returns 403 and does not call handler when guard denies request", async () => {
+      let handlerCalled = false;
+
+      @Injectable()
+      @Controller("secure")
+      class SecureController {
+        @Get("")
+        @UseGuards(new AuthGuard())
+        findSecure() {
+          handlerCalled = true;
+          return { ok: true };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([SecureController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/secure`);
+        const body = await response.json();
+
+        assert.equal(response.status, 403);
+        assert.equal(body.error, "Forbidden");
+        assert.equal(handlerCalled, false);
+      } finally {
+        await close(server);
+      }
+    });
+
+    it("calls handler when guarded request has Authorization header", async () => {
+      let handlerCalled = false;
+
+      @Injectable()
+      @Controller("secure")
+      class SecureController {
+        @Get("")
+        @UseGuards(new AuthGuard())
+        findSecure() {
+          handlerCalled = true;
+          return { ok: true };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([SecureController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/secure`, {
+          headers: { Authorization: "Bearer test" },
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body, { ok: true });
+        assert.equal(handlerCalled, true);
+      } finally {
+        await close(server);
+      }
+    });
+  });
+
+  describe("interceptors", () => {
+    it("logs method, path, and duration in milliseconds", async () => {
+      const logs: string[] = [];
+      const originalLog = console.log;
+
+      @Injectable()
+      @Controller("users")
+      class UsersController {
+        @Get(":id")
+        @UseInterceptors(new LoggingInterceptor())
+        findOne(@Param("id") id: string) {
+          return { id };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([UsersController]);
+
+      console.log = (...args: unknown[]) => {
+        logs.push(args.map(String).join(" "));
+      };
+
+      try {
+        const response = await fetch(`${baseUrl}/users/42`);
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body, { id: "42" });
+      } finally {
+        console.log = originalLog;
+        await close(server);
+      }
+
+      assert.match(logs.join("\n"), /GET \/users\/42 - [0-9]+(\.[0-9]+)? ms/);
+    });
+  });
+
+  describe("request context", () => {
+    it("returns X-Request-Id and exposes it inside deep service calls", async () => {
+      @Injectable()
+      class UsersService {
+        async findRequestId() {
+          return this.readRequestIdTwoLevelsDeep();
+        }
+
+        private async readRequestIdTwoLevelsDeep() {
+          await Promise.resolve();
+          return requestContext.getRequestId();
+        }
+      }
+
+      @Injectable()
+      @Controller("context")
+      class ContextController {
+        constructor(private usersService: UsersService) {}
+
+        @Get("")
+        async findContext() {
+          return { requestId: await this.usersService.findRequestId() };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([ContextController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/context`, {
+          headers: { "X-Request-Id": "req-from-client" },
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("x-request-id"), "req-from-client");
+        assert.equal(body.requestId, "req-from-client");
+      } finally {
+        await close(server);
+      }
+    });
+
+    it("isolates request ids across parallel HTTP requests", async () => {
+      const delay = (ms: number) =>
+        new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+      @Injectable()
+      @Controller("context")
+      class ContextController {
+        @Get("")
+        async findContext(@Query("delay") delayMs: string) {
+          await delay(Number(delayMs));
+          return { requestId: requestContext.getRequestId() };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([ContextController]);
+
+      try {
+        const results = await Promise.all(
+          Array.from({ length: 10 }, async (_, index) => {
+            const requestId = `req-${index}`;
+            const response = await fetch(
+              `${baseUrl}/context?delay=${10 - index}`,
+              { headers: { "X-Request-Id": requestId } },
+            );
+            const body = await response.json();
+
+            return {
+              expectedRequestId: requestId,
+              responseRequestId: response.headers.get("x-request-id"),
+              bodyRequestId: body.requestId,
+            };
+          }),
+        );
+
+        for (const result of results) {
+          assert.equal(result.responseRequestId, result.expectedRequestId);
+          assert.equal(result.bodyRequestId, result.expectedRequestId);
+        }
       } finally {
         await close(server);
       }
@@ -262,6 +457,30 @@ describe("Dispatcher", () => {
   });
 
   describe("errors", () => {
+    it("maps NotFoundError to 404 with a meaningful message", async () => {
+      @Injectable()
+      @Controller("users")
+      class UsersController {
+        @Get(":id")
+        findOne(@Param("id") id: string) {
+          throw new NotFoundError(`User ${id} was not found`);
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([UsersController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/users/404`);
+        const body = await response.json();
+
+        assert.equal(response.status, 404);
+        assert.equal(body.error, "Not Found");
+        assert.equal(body.message, "User 404 was not found");
+      } finally {
+        await close(server);
+      }
+    });
+
     it("returns 500 when controller handler throws", async () => {
       @Injectable()
       @Controller("")
@@ -277,9 +496,11 @@ describe("Dispatcher", () => {
       try {
         const response = await fetch(`${baseUrl}/boom`);
         const body = await response.json();
+        const serializedBody = JSON.stringify(body);
 
         assert.equal(response.status, 500);
         assert.deepEqual(body, { error: "Internal Server Error" });
+        assert.doesNotMatch(serializedBody, /boom|at .*\.ts:/);
       } finally {
         await close(server);
       }

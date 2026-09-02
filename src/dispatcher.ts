@@ -7,8 +7,8 @@ import { Router } from "./router";
 import http from "node:http";
 import requestContext from "./context/request-context";
 import exceptionFilter from "./filters/exception.filter";
-import { ROUTE_GUARDS, ROUTE_PIPES } from "./tokens";
-import { AuthError, NotFoundError } from "./errors";
+import { ROUTE_GUARDS, ROUTE_INTERCEPTORS, ROUTE_PIPES } from "./tokens";
+import { AuthError, NotFoundError, ValidationError } from "./errors";
 
 type RouteMatch = NonNullable<ReturnType<Router["match"]>>;
 type ControllerInstance = Record<
@@ -72,17 +72,44 @@ export class Dispatcher {
       }
     }
 
+    const interceptors =
+      Reflect.getMetadata(
+        ROUTE_INTERCEPTORS,
+        match.route.controller.prototype,
+        match.route.methodName,
+      ) ?? [];
+
+    let next = async () => {
+      const parsedBody = await this.parseBody(req, requestMethod);
+      const args = await this.buildArgs(match, url, parsedBody);
+      return await this.invokeRouteHandler(match, args);
+    };
+
+    for (const interceptor of [...interceptors].reverse()) {
+      const currentNext = next;
+      next = () => interceptor.intercept(req, currentNext);
+    }
+
+    const result = await next();
+
+    this.sendJson(res, requestMethod === METHOD.GET ? 200 : 201, result);
+  }
+
+  private async parseBody(req: http.IncomingMessage, requestMethod: string) {
     let parsedBody: unknown = undefined;
 
     if (requestMethod === METHOD.POST) {
       try {
         parsedBody = await this.readBody(req);
       } catch {
-        this.sendJson(res, 400, { error: "Invalid JSON" });
-        return;
+        throw new ValidationError([]);
       }
     }
 
+    return parsedBody;
+  }
+
+  private async buildArgs(match: RouteMatch, url: URL, parsedBody: unknown) {
     const args: unknown[] = [];
 
     for (const [index, metadata] of Object.entries(match.route.params)) {
@@ -116,9 +143,7 @@ export class Dispatcher {
       }
     }
 
-    const result = await this.invokeRouteHandler(match, args);
-
-    this.sendJson(res, requestMethod === METHOD.GET ? 200 : 201, result);
+    return args;
   }
 
   private async invokeRouteHandler(match: RouteMatch, args: unknown[]) {

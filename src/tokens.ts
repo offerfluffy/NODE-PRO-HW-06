@@ -6,6 +6,7 @@ export const ROUTES = Symbol("routes");
 export const ROUTE_PARAMS = Symbol("route_params");
 export const ROUTE_PIPES = Symbol("route_pipes");
 export const ROUTE_GUARDS = Symbol("route_guards");
+export const ROUTE_INTERCEPTORS = Symbol("route_interceptors");
 
 export const Scope = {
   SINGLETON: "singleton",

@@ -11,6 +11,8 @@ import { UsePipes } from "../src/decorators/use-pipes";
 import { ZodValidationPipe } from "../src/pipes/validation.pipe";
 import { UseGuards } from "../src/decorators/use-guards";
 import { AuthGuard } from "../src/guards/auth.guard";
+import { UseInterceptors } from "../src/decorators/use-interceptors";
+import loggingInterceptor from "../src/interceptors/logging.interceptor";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -328,6 +330,42 @@ describe("Dispatcher", () => {
       } finally {
         await close(server);
       }
+    });
+  });
+
+  describe("interceptors", () => {
+    it("logs method, path, and duration in milliseconds", async () => {
+      const logs: string[] = [];
+      const originalLog = console.log;
+
+      @Injectable()
+      @Controller("users")
+      class UsersController {
+        @Get(":id")
+        @UseInterceptors(loggingInterceptor)
+        findOne(@Param("id") id: string) {
+          return { id };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([UsersController]);
+
+      console.log = (...args: unknown[]) => {
+        logs.push(args.map(String).join(" "));
+      };
+
+      try {
+        const response = await fetch(`${baseUrl}/users/42`);
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(body, { id: "42" });
+      } finally {
+        console.log = originalLog;
+        await close(server);
+      }
+
+      assert.match(logs.join("\n"), /GET \/users\/42 - [0-9]+(\.[0-9]+)? ms/);
     });
   });
 

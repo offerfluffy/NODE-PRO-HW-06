@@ -13,6 +13,7 @@ import { UseGuards } from "../src/decorators/use-guards";
 import { AuthGuard } from "../src/guards/auth.guard";
 import { UseInterceptors } from "../src/decorators/use-interceptors";
 import { LoggingInterceptor } from "../src/interceptors/logging.interceptor";
+import requestContext from "../src/context/request-context";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -366,6 +367,91 @@ describe("Dispatcher", () => {
       }
 
       assert.match(logs.join("\n"), /GET \/users\/42 - [0-9]+(\.[0-9]+)? ms/);
+    });
+  });
+
+  describe("request context", () => {
+    it("returns X-Request-Id and exposes it inside deep service calls", async () => {
+      @Injectable()
+      class UsersService {
+        async findRequestId() {
+          return this.readRequestIdTwoLevelsDeep();
+        }
+
+        private async readRequestIdTwoLevelsDeep() {
+          await Promise.resolve();
+          return requestContext.getRequestId();
+        }
+      }
+
+      @Injectable()
+      @Controller("context")
+      class ContextController {
+        constructor(private usersService: UsersService) {}
+
+        @Get("")
+        async findContext() {
+          return { requestId: await this.usersService.findRequestId() };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([ContextController]);
+
+      try {
+        const response = await fetch(`${baseUrl}/context`, {
+          headers: { "X-Request-Id": "req-from-client" },
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("x-request-id"), "req-from-client");
+        assert.equal(body.requestId, "req-from-client");
+      } finally {
+        await close(server);
+      }
+    });
+
+    it("isolates request ids across parallel HTTP requests", async () => {
+      const delay = (ms: number) =>
+        new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+      @Injectable()
+      @Controller("context")
+      class ContextController {
+        @Get("")
+        async findContext(@Query("delay") delayMs: string) {
+          await delay(Number(delayMs));
+          return { requestId: requestContext.getRequestId() };
+        }
+      }
+
+      const { server, baseUrl } = await createTestServer([ContextController]);
+
+      try {
+        const results = await Promise.all(
+          Array.from({ length: 10 }, async (_, index) => {
+            const requestId = `req-${index}`;
+            const response = await fetch(
+              `${baseUrl}/context?delay=${10 - index}`,
+              { headers: { "X-Request-Id": requestId } },
+            );
+            const body = await response.json();
+
+            return {
+              expectedRequestId: requestId,
+              responseRequestId: response.headers.get("x-request-id"),
+              bodyRequestId: body.requestId,
+            };
+          }),
+        );
+
+        for (const result of results) {
+          assert.equal(result.responseRequestId, result.expectedRequestId);
+          assert.equal(result.bodyRequestId, result.expectedRequestId);
+        }
+      } finally {
+        await close(server);
+      }
     });
   });
 

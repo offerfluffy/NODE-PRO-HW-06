@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { Container } from "./container";
 import { METHOD, MethodValue } from "./decorators/methods";
 import { PARAM } from "./decorators/params";
-import { ValidationException, ValidationPipe } from "./pipes/validation.pipe";
 import { Router } from "./router";
 
 import http from "node:http";
 import requestContext from "./context/request-context";
+import exceptionFilter from "./filters/exception.filter";
+import { ROUTE_PIPES } from "./tokens";
+import { NotFoundError } from "./errors";
 
 type RouteMatch = NonNullable<ReturnType<Router["match"]>>;
 type ControllerInstance = Record<
@@ -22,7 +24,6 @@ export class Dispatcher {
   constructor(
     private container: Container,
     private router: Router,
-    private validationPipe = new ValidationPipe(),
   ) {}
 
   async handle(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -34,8 +35,8 @@ export class Dispatcher {
       await requestContext.run(requestId, async () => {
         await this.dispatch(req, res);
       });
-    } catch {
-      this.sendJson(res, 500, { error: "Internal Server Error" });
+    } catch (error) {
+      exceptionFilter.catch(error, res);
     }
   }
 
@@ -51,8 +52,9 @@ export class Dispatcher {
 
     const match = this.router.match(requestMethod, pathname);
     if (match === undefined) {
-      this.sendJson(res, 404, { error: "Not Found" });
-      return;
+      throw new NotFoundError(
+        `Route ${requestMethod} ${pathname} was not found`,
+      );
     }
 
     let parsedBody: unknown = undefined;
@@ -67,12 +69,6 @@ export class Dispatcher {
     }
 
     const args: unknown[] = [];
-    const paramTypes =
-      Reflect.getMetadata(
-        "design:paramtypes",
-        match.route.controller.prototype,
-        match.route.methodName,
-      ) ?? [];
 
     for (const [index, metadata] of Object.entries(match.route.params)) {
       const paramIndex = Number(index);
@@ -88,20 +84,20 @@ export class Dispatcher {
 
         args[paramIndex] = url.searchParams.get(metadata.name);
       } else if (metadata.type === PARAM.BODY) {
-        try {
-          const dtoClass = paramTypes[paramIndex];
-          args[paramIndex] = await this.validationPipe.transform(
-            parsedBody,
-            dtoClass,
-          );
-        } catch (error) {
-          if (error instanceof ValidationException) {
-            this.sendJson(res, 400, { errors: error.details });
-            return;
-          }
+        const pipes =
+          Reflect.getMetadata(
+            ROUTE_PIPES,
+            match.route.controller.prototype,
+            match.route.methodName,
+          ) ?? [];
 
-          throw error;
+        let bodyArg = parsedBody;
+
+        for (const pipe of pipes) {
+          bodyArg = await pipe.transform(bodyArg);
         }
+
+        args[paramIndex] = bodyArg;
       }
     }
 

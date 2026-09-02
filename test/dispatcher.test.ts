@@ -6,7 +6,9 @@ import Injectable from "../src/decorators/injectable";
 import { Container } from "../src/container";
 import { Router } from "../src/router";
 import { Dispatcher } from "../src/dispatcher";
-import { CreateUserDto } from "../src/dto/create-user.dto";
+import { CreateUserDto, CreateUserSchema } from "../src/dto/create-user.dto";
+import { UsePipes } from "../src/decorators/use-pipes";
+import { ZodValidationPipe } from "../src/pipes/validation.pipe";
 import http from "node:http";
 import assert from "node:assert/strict";
 
@@ -198,6 +200,7 @@ describe("Dispatcher", () => {
         constructor(private usersService: UsersService) {}
 
         @Post("")
+        @UsePipes(new ZodValidationPipe(CreateUserSchema))
         create(@Body() body: CreateUserDto) {
           return this.usersService.create(body);
         }
@@ -214,20 +217,18 @@ describe("Dispatcher", () => {
         const body = await response.json();
 
         assert.equal(response.status, 400);
-        assert.match(JSON.stringify(body), /email/);
+        assert.equal(body.error, "Validation Error");
+        assert.match(JSON.stringify(body.fields), /email/);
       } finally {
         await close(server);
       }
     });
 
-    it("passes DTO instance to handler for valid body", async () => {
+    it("passes parsed Zod data to handler for valid body", async () => {
       @Injectable()
       class UsersService {
         create(body: CreateUserDto) {
-          return {
-            email: body.email,
-            isDto: body instanceof CreateUserDto,
-          };
+          return body;
         }
       }
 
@@ -237,6 +238,7 @@ describe("Dispatcher", () => {
         constructor(private usersService: UsersService) {}
 
         @Post("")
+        @UsePipes(new ZodValidationPipe(CreateUserSchema))
         create(@Body() body: CreateUserDto) {
           return this.usersService.create(body);
         }
@@ -248,13 +250,19 @@ describe("Dispatcher", () => {
         const response = await fetch(`${baseUrl}/users`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "ada@example.com", name: "Ada" }),
+          body: JSON.stringify({
+            email: "ada@example.com",
+            name: "Ada",
+            role: "admin",
+          }),
         });
         const body = await response.json();
 
         assert.equal(response.status, 201);
-        assert.equal(body.email, "ada@example.com");
-        assert.equal(body.isDto, true);
+        assert.deepEqual(body, {
+          email: "ada@example.com",
+          name: "Ada",
+        });
       } finally {
         await close(server);
       }

@@ -13,9 +13,9 @@ export class ZodValidationPipe implements PipeTransform {
 
     if (!result.success) {
       throw new ValidationError(
-        result.error.issues.map((feild) => ({
-          field: feild.path.join("."),
-          message: feild.message,
+        result.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
         })),
       );
     }
